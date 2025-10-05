@@ -11,8 +11,14 @@ extension Container {
             .singleton
     }
     
+    var depthProcessor: Factory<DepthProcessor> {
+        self { DepthProcessorImpl() }
+            .singleton
+    }
+    
     var ghostCamViewModel: Factory<RetroCamViewModel> {
         self { RetroCamViewModel(cameraManager: self.cameraManager(), 
-                                 orientationManager: self.orientationManager()) }
+                                 orientationManager: self.orientationManager(),
+                                 depthProcessor: self.depthProcessor()) }
     }
 }

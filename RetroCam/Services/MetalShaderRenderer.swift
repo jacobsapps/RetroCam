@@ -68,6 +68,8 @@ final class MetalShaderRenderer {
             return renderSinglePass(pixelBuffer: pixelBuffer, kernelName: "alien2")
         case .inversion:
             return renderSinglePass(pixelBuffer: pixelBuffer, kernelName: "inversion")
+        case .depth:
+            return nil
         }
     }
     

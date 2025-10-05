@@ -6,17 +6,21 @@ final class RetroCamViewModel {
     
     private let cameraManager: CameraManager
     private let orientationManager: OrientationManager
+    private let depthProcessor: DepthProcessor
     private let shaderRenderer = MetalShaderRenderer(config: .standard)
     private var cancellables = Set<AnyCancellable>()
+    private var frameProcessingCancellable: AnyCancellable?
     private var isProcessing = false
     private var latestProcessedImage: UIImage?
+    private var currentFilter: FilterType = .eightBit
     
     let didCapturePhoto = PassthroughSubject<Void, Never>()
     let processedFrame = PassthroughSubject<UIImage, Never>()
     
-    init(cameraManager: CameraManager, orientationManager: OrientationManager) {
+    init(cameraManager: CameraManager, orientationManager: OrientationManager, depthProcessor: DepthProcessor) {
         self.cameraManager = cameraManager
         self.orientationManager = orientationManager
+        self.depthProcessor = depthProcessor
         setupFrameProcessing()
     }
     
@@ -35,27 +39,40 @@ final class RetroCamViewModel {
     }
     
     private func setupFrameProcessing() {
-        cameraManager.framePublisher
-            .throttle(for: .milliseconds(33), scheduler: DispatchQueue.main, latest: true)
+        let throttleInterval = currentFilter == .depth ? 66 : 33
+        frameProcessingCancellable = cameraManager.framePublisher
+            .throttle(for: .milliseconds(throttleInterval), scheduler: DispatchQueue.main, latest: true)
             .sink { [weak self] pixelBuffer in
                 guard let self = self, !self.isProcessing else { return }
                 self.isProcessing = true
                 
-                DispatchQueue.global(qos: .userInitiated).async {
-                    guard let processedBuffer = self.shaderRenderer?.render(pixelBuffer: pixelBuffer),
-                          let image = self.convertToUIImage(pixelBuffer: processedBuffer) else {
-                        self.isProcessing = false
-                        return
+                if self.currentFilter == .depth {
+                    let orientation = self.orientationManager.currentOrientation
+                    self.depthProcessor.processFrame(pixelBuffer, orientation: orientation) { image in
+                        DispatchQueue.main.async {
+                            if let image = image {
+                                self.latestProcessedImage = image
+                                self.processedFrame.send(image)
+                            }
+                            self.isProcessing = false
+                        }
                     }
-                    
-                    DispatchQueue.main.async {
-                        self.latestProcessedImage = image
-                        self.processedFrame.send(image)
-                        self.isProcessing = false
+                } else {
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        guard let processedBuffer = self.shaderRenderer?.render(pixelBuffer: pixelBuffer),
+                              let image = self.convertToUIImage(pixelBuffer: processedBuffer) else {
+                            self.isProcessing = false
+                            return
+                        }
+                        
+                        DispatchQueue.main.async {
+                            self.latestProcessedImage = image
+                            self.processedFrame.send(image)
+                            self.isProcessing = false
+                        }
                     }
                 }
             }
-            .store(in: &cancellables)
     }
     
     func startCamera() {
@@ -99,7 +116,9 @@ final class RetroCamViewModel {
     }
     
     func setFilter(_ filterType: FilterType) {
+        currentFilter = filterType
         shaderRenderer?.filterType = filterType
+        setupFrameProcessing()
     }
     
     func toggleCamera() {
